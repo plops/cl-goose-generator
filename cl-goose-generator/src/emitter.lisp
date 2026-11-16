@@ -10,9 +10,6 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
 (defvar *indent-width* 4
   "Spaces per indentation level.")
 
-(defvar *indent-level* 0)
-(defvar *block-context-p* nil
-  "T when emitting directly inside a parent's { ... } block.")
 (defvar *make-context-p* nil
   "T when emitting struct literal initializers (for const-for/const-if).")
 (defvar *match-context-p* nil
@@ -20,13 +17,15 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
 (defvar *const-cond-expr-p* nil
   "T when emitting a const-if condition (renders has_default<A>, same<T1, T2>).")
 
-(defun indent-str (&optional (level *indent-level*))
+(defun indent-str (&optional (level 1))
   (make-string (* level *indent-width*) :initial-element #\Space))
 
-(defun indent-lines (text &optional (level *indent-level*))
+(defun indent-lines (text &optional (level 1))
   "Prefix every non-empty line in TEXT with indentation LEVEL."
-  (let ((pad (indent-str level))
-        (len (length text)))
+  (if (zerop level)
+      text
+      (let ((pad (indent-str level))
+            (len (length text)))
     (if (zerop len)
         ""
         (with-output-to-string (out)
@@ -38,7 +37,7 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
                      (write-string line out))
                 when pos do (write-char #\Newline out)
                 while pos
-                do (setf start (1+ pos)))))))
+                do (setf start (1+ pos))))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Operator table & precedence (Goose Reference Appendix A)
@@ -92,27 +91,26 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
 
 (defun statement-only-form-p (form)
   "Return T if FORM is strictly a statement (never a trailing value expression)."
-  (or (not (consp form))
-      (and (symbolp (car form))
-           (sym-member (car form)
-                       '("DO0" "SETF" ".=" "INCF" "DECF"
-                         "+=" "-=" "*=" "/=" "%=" "&=" "|=" "^=" "<<=" ">>="
-                         "LET" "LET*" "VAR" "CONST"
-                         "WHEN" "UNLESS" "GUARD" "DEFER"
-                         "LOOP" "WHILE" "FOR" "DOTIMES" "DOLIST"
-                         "BREAK" "CONTINUE" "RETURN" "RETURN-FROM"
-                         "COMMENTS" "BLOCK-COMMENT" "SPACE" "RAW"
-                         "CONST-FOR" "CONST-IF" "CONST-COND"
-                         "PRINT" "FORMAT" "ASSERT" "ABORT" "EXIT"
-                         "QPUT" "QLIMIT")))
-      ;; Void mutating dot-calls like xs.push(...), xs.clear(), pool.free(...)
-      (and (consp form)
-           (sym-eq (car form) "DOT")
-           (let ((last-part (car (last (cdr form)))))
-             (and (consp last-part)
-                  (sym-member (car last-part)
-                              '("APPEND" "CLEAR" "RESIZE" "POP_N"
-                                "FREE" "FREE_SLICE" "MOVE_FROM")))))))
+  (and (consp form)
+       (or (and (symbolp (car form))
+                (sym-member (car form)
+                            '("DO0" "SETF" ".=" "INCF" "DECF"
+                              "+=" "-=" "*=" "/=" "%=" "&=" "|=" "^=" "<<=" ">>="
+                              "LET" "LET*" "VAR" "CONST"
+                              "WHEN" "UNLESS" "GUARD" "DEFER"
+                              "LOOP" "WHILE" "FOR" "DOTIMES" "DOLIST"
+                              "BREAK" "CONTINUE" "RETURN" "RETURN-FROM"
+                              "COMMENTS" "BLOCK-COMMENT" "SPACE" "RAW"
+                              "CONST-FOR" "CONST-IF" "CONST-COND"
+                              "PRINT" "FORMAT" "ASSERT" "ABORT" "EXIT"
+                              "QPUT" "QLIMIT")))
+           ;; Void mutating dot-calls like xs.push(...), xs.clear(), pool.free(...)
+           (and (sym-eq (car form) "DOT")
+                (let ((last-part (car (last (cdr form)))))
+                  (and (consp last-part)
+                       (sym-member (car last-part)
+                                   '("APPEND" "CLEAR" "RESIZE" "POP_N"
+                                     "FREE" "FREE_SLICE" "MOVE_FROM"))))))))
 
 (defun negative-number-p (form)
   (and (numberp form) (< form 0)))
@@ -314,7 +312,7 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
             (let ((result (emit-operand-for-postfix (first args))))
               (dolist (part (rest args))
                 (cond
-                  ((symbolp part)
+                  ((or (symbolp part) (stringp part))
                    (setf result (format nil "~a.~a" result (goose-symbol-name part))))
                   ((consp part)
                    (let ((mhead (car part))
@@ -503,18 +501,15 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
                 (if single-expr
                     (format nil "~a { ~a ~a }"
                             call-str header-prefix (emit-expr (first body)))
-                    (let* ((inner (let ((*indent-level* (1+ *indent-level*))
-                                        (*block-context-p* t))
-                                    (emit-body-forms body :expr-last-p nil)))
+                    (let* ((inner (emit-body-forms body :expr-last-p nil :indent 1))
                            (param-line (when header-prefix
                                          (format nil "~a~a~%"
-                                                 (indent-str (1+ *indent-level*))
+                                                 (indent-str 1)
                                                  header-prefix))))
-                      (format nil "~a {~%~@[~a~]~a~a}"
+                      (format nil "~a {~%~@[~a~]~a}"
                               call-str
                               param-line
-                              inner
-                              (indent-str))))))))))
+                              inner)))))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Bindings & Declarations (let, var, const, defparameter, defconstant)
@@ -523,7 +518,7 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
 (defun emit-binding-lhs (lhs)
   "Return (values lhs-str op-str) for a binding target: x, (.= x), or (tuple a b)."
   (cond
-    ((symbolp lhs)
+    ((or (symbolp lhs) (stringp lhs))
      (values (goose-symbol-name lhs) "="))
     ((and (consp lhs) (sym-eq (car lhs) ".="))
      (unless (= (length lhs) 2)
@@ -558,27 +553,25 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
         (t
          (error "Declaration ~s requires an initializer or (name nil type)" binding))))))
 
-(defun emit-binding-form (kw bindings body &key expr-p)
+(defun emit-binding-form (kw bindings body &key expr-p flat-indent)
   (let ((decl-lines (mapcar (lambda (b) (emit-single-decl kw b)) bindings)))
     (cond
       ;; No body: emit flat declaration statements
       ((null body)
        (format nil "~{~a~^~%~}" decl-lines))
-      ;; Sole body of a block-delimited construct (defun, for, loop, etc.)
-      (*block-context-p*
-       (let ((body-block (emit-body-forms body :expr-last-p expr-p :already-indented nil)))
+      ;; Sole body inside an enclosing { ... } block: emit flat at FLAT-INDENT
+      (flat-indent
+       (let ((body-block (emit-body-forms body :expr-last-p expr-p :indent flat-indent)))
          (format nil "~{~a~%~}~a"
-                 (mapcar (lambda (l) (concatenate 'string (indent-str) l)) decl-lines)
+                 (mapcar (lambda (l) (concatenate 'string (indent-str flat-indent) l)) decl-lines)
                  body-block)))
-      ;; Nested lexical block inside do0 or another let/var: wrap in { ... }
+      ;; Nested lexical block inside do0 or alongside sibling statements: wrap in { ... }
       (t
-       (let ((inner (let ((*indent-level* (1+ *indent-level*))
-                          (*block-context-p* t))
-                      (with-output-to-string (out)
-                        (dolist (l decl-lines)
-                          (format out "~a~a~%" (indent-str) l))
-                        (write-string (emit-body-forms body :expr-last-p expr-p) out)))))
-         (format nil "{~%~a~a}" inner (indent-str)))))))
+       (let ((inner (with-output-to-string (out)
+                      (dolist (l decl-lines)
+                        (format out "~a~a~%" (indent-str 1) l))
+                      (write-string (emit-body-forms body :expr-last-p expr-p :indent 1) out))))
+         (format nil "{~%~a}" inner))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Control Flow: if, cond, when, unless, match, loop, while, for, guard, defer
@@ -599,10 +592,8 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
                                  s)))))
         (if inline-ok
             (format nil "{ ~a }" inline-ok)
-            (let ((inner (let ((*indent-level* (1+ *indent-level*))
-                               (*block-context-p* t))
-                           (emit-body-forms forms :expr-last-p expr-p))))
-              (format nil "{~%~a~a}" inner (indent-str)))))))
+            (let ((inner (emit-body-forms forms :expr-last-p expr-p :indent 1)))
+              (format nil "{~%~a}" inner))))))
 
 (defun emit-block-like (prefix forms &key expr-p)
   (let ((body (emit-block-body forms :expr-p expr-p)))
@@ -699,16 +690,11 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
 (defun emit-match (form &key expr-p)
   (let ((scrutinee (second form))
         (arms (cddr form)))
-    (let ((inner (let ((*indent-level* (1+ *indent-level*)))
-                   (with-output-to-string (out)
-                     (dolist (arm arms)
-                       (format out "~a~a~%"
-                               (indent-str)
-                               (emit-match-arm arm :expr-p expr-p)))))))
-      (format nil "match ~a {~%~a~a}"
-              (emit-expr scrutinee)
-              inner
-              (indent-str)))))
+    (let ((inner (with-output-to-string (out)
+                   (dolist (arm arms)
+                     (write-string (indent-lines (emit-match-arm arm :expr-p expr-p) 1) out)
+                     (write-char #\Newline out)))))
+      (format nil "match ~a {~%~a}" (emit-expr scrutinee) inner))))
 
 (defun emit-for-header (spec)
   "Parse (for (<binder> <seq> [<type>]) ...) header into Goose 'for ...'."
@@ -719,7 +705,7 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
          (type-spec (third spec))
          (binder-str
           (cond
-            ((symbolp binder) (goose-symbol-name binder))
+            ((or (symbolp binder) (stringp binder)) (goose-symbol-name binder))
             ((and (consp binder) (sym-eq (car binder) "TUPLE"))
              (format nil "~{~a~^, ~}" (mapcar #'goose-symbol-name (cdr binder))))
             (t (error "Invalid FOR binder ~s" binder)))))
@@ -768,7 +754,7 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
     (let* ((binder (first spec))
            (seq (second spec))
            (vars (cond
-                   ((symbolp binder) (list (goose-symbol-name binder)))
+                   ((or (symbolp binder) (stringp binder)) (list (goose-symbol-name binder)))
                    ((and (consp binder) (sym-eq (car binder) "TUPLE"))
                     (mapcar #'goose-symbol-name (cdr binder)))
                    (t (error "Invalid CONST-FOR binder ~s" binder))))
@@ -786,13 +772,11 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
                  (format nil "~a { ~{~a~^, ~}~a }"
                          header entries (if entries "," ""))))))
         (*match-context-p*
-         (let ((inner (let ((*indent-level* (1+ *indent-level*)))
-                        (with-output-to-string (out)
-                          (dolist (arm body)
-                            (format out "~a~a~%"
-                                    (indent-str)
-                                    (emit-match-arm arm)))))))
-           (format nil "~a {~%~a~a}" header inner (indent-str))))
+         (let ((inner (with-output-to-string (out)
+                        (dolist (arm body)
+                          (write-string (indent-lines (emit-match-arm arm) 1) out)
+                          (write-char #\Newline out)))))
+           (format nil "~a {~%~a}" header inner)))
         (t
          (format nil "~a ~a" header (emit-block-body body :expr-p nil)))))))
 
@@ -802,13 +786,11 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
      (multiple-value-bind (entries) (emit-make-entries forms)
        (format nil "{ ~{~a~^, ~}~a }" entries (if entries "," ""))))
     (*match-context-p*
-     (let ((inner (let ((*indent-level* (1+ *indent-level*)))
-                    (with-output-to-string (out)
-                      (dolist (arm forms)
-                        (format out "~a~a~%"
-                                (indent-str)
-                                (emit-match-arm arm)))))))
-       (format nil "{~%~a~a}" inner (indent-str))))
+     (let ((inner (with-output-to-string (out)
+                    (dolist (arm forms)
+                      (write-string (indent-lines (emit-match-arm arm) 1) out)
+                      (write-char #\Newline out)))))
+       (format nil "{~%~a}" inner)))
     (t
      (emit-block-body forms :expr-p nil))))
 
@@ -862,13 +844,13 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
 
 (defun parse-struct-header (name-spec clauses)
   "Extract struct name string, generic parameters, and field clauses."
-  (let ((generics nil)
-        (fields clauses)
-        (name-str (if (and (consp name-spec) (not (sym-eq (car name-spec) "NS")))
-                      (progn
-                        (setf generics (mapcar #'goose-symbol-name (cdr name-spec)))
-                        (emit-type (first name-spec)))
-                      (emit-type name-spec))))
+  (let* ((generics nil)
+         (fields clauses)
+         (name-str (if (and (consp name-spec) (not (sym-eq (car name-spec) "NS")))
+                       (progn
+                         (setf generics (mapcar #'goose-symbol-name (cdr name-spec)))
+                         (emit-type (first name-spec)))
+                       (emit-type name-spec))))
     (when (and (consp (first fields)) (sym-eq (car (first fields)) "DECLARE"))
       (dolist (d (cdr (pop fields)))
         (when (and (consp d) (sym-eq (car d) "GENERICS"))
@@ -909,15 +891,14 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
                (<= (length field-strs) 4)
                (< (reduce #'+ field-strs :key #'length :initial-value 0) 64))
           (format nil "~a ~a~a { ~{~a~^, ~} }" kw name-str gen-str field-strs)
-          (format nil "~a ~a~a {~%~{~a~a,~%~}~a}"
+          (format nil "~a ~a~a {~%~{~a~a,~%~}}"
                   kw name-str gen-str
-                  (mapcan (lambda (f) (list (indent-str (1+ *indent-level*)) f))
-                          field-strs)
-                  (indent-str))))))
+                  (mapcan (lambda (f) (list (indent-str 1) f))
+                          field-strs))))))
 
 (defun emit-enum-variant (v)
   (cond
-    ((symbolp v) (goose-symbol-name v))
+    ((or (symbolp v) (stringp v)) (goose-symbol-name v))
     ((consp v)
      (let ((vname (goose-symbol-name (first v)))
            (fields (mapcar #'emit-struct-field (rest v))))
@@ -934,11 +915,10 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
       (if (and (<= (length var-strs) 4)
                (< (reduce #'+ var-strs :key #'length :initial-value 0) 64))
           (format nil "enum ~a~a { ~{~a~^, ~} }" name-str gen-str var-strs)
-          (format nil "enum ~a~a {~%~{~a~a,~%~}~a}"
+          (format nil "enum ~a~a {~%~{~a~a,~%~}}"
                   name-str gen-str
-                  (mapcan (lambda (v) (list (indent-str (1+ *indent-level*)) v))
-                          var-strs)
-                  (indent-str))))))
+                  (mapcan (lambda (v) (list (indent-str 1) v))
+                          var-strs))))))
 
 (defun parse-defun-lambda-list (params)
   "Parse CL lambda list (a b &optional (c 0)) into list of (name default-p default-form)."
@@ -1081,10 +1061,8 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
                                          (not (statement-only-form-p (first body)))))))
                (if (null body)
                    (format nil "~a {}" sig)
-                   (let ((inner (let ((*indent-level* (1+ *indent-level*))
-                                      (*block-context-p* t))
-                                  (emit-body-forms body :expr-last-p expr-last-p))))
-                     (format nil "~a {~%~a~a}" sig inner (indent-str))))))))))))
+                   (let ((inner (emit-body-forms body :expr-last-p expr-last-p :indent 1)))
+                     (format nil "~a {~%~a}" sig inner)))))))))))
 
 (defun emit-global-decl (kw args)
   (let* ((lhs (first args))
@@ -1169,16 +1147,13 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
          ((string= k "EXTERN-LIB")
           (let* ((lib-name (first args))
                  (decls (rest args))
-                 (inner (let ((*indent-level* (1+ *indent-level*)))
-                          (with-output-to-string (out)
-                            (dolist (d decls)
-                              (format out "~a~a~%"
-                                      (indent-str)
-                                      (emit-defun d :inside-extern-lib-p t)))))))
-            (format nil "extern ~a {~%~a~a}"
+                 (inner (with-output-to-string (out)
+                          (dolist (d decls)
+                            (write-string (indent-lines (emit-defun d :inside-extern-lib-p t) 1) out)
+                            (write-char #\Newline out)))))
+            (format nil "extern ~a {~%~a}"
                     (escape-goose-string lib-name)
-                    inner
-                    (indent-str))))
+                    inner)))
 
          ((string= k "DEFPARAMETER") (emit-global-decl "var" args))
          ((string= k "DEFCONSTANT")  (emit-global-decl "let" args))
@@ -1305,9 +1280,8 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
          (t
           (format nil "~a;" (emit-expr form))))))))
 
-(defun emit-body-forms (forms &key expr-last-p already-indented)
-  "Emit a sequence of statement/expression forms with current *indent-level*."
-  (declare (ignore already-indented))
+(defun emit-body-forms (forms &key expr-last-p (indent 0))
+  "Emit a sequence of statement/expression forms indented by INDENT levels."
   (with-output-to-string (out)
     (loop for (f . rest) on forms
           for is-last = (null rest)
@@ -1315,10 +1289,12 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
                ;; Flatten top-level or nested DO0 cleanly
                ((and (consp f) (sym-eq (car f) "DO0"))
                 (write-string (emit-body-forms (cdr f)
-                                               :expr-last-p (and is-last expr-last-p))
+                                               :expr-last-p (and is-last expr-last-p)
+                                               :indent indent)
                               out))
-               ;; LET / VAR / CONST at sole position emits directly inside parent block
+               ;; LET / VAR / CONST at sole position inside an enclosing block emits flat
                ((and (= (length forms) 1)
+                     (plusp indent)
                      (consp f)
                      (sym-member (car f) '("LET" "LET*" "VAR" "CONST"))
                      (rest (cdr f)))
@@ -1328,23 +1304,22 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
                                  ((sym-eq (car f) "CONST") "const")
                                  (t "let"))
                                (second f) (cddr f)
-                               :expr-p expr-last-p)
+                               :expr-p expr-last-p
+                               :flat-indent indent)
                               out))
                ;; Trailing value expression in value-producing block
                ((and is-last expr-last-p (not (statement-only-form-p f)))
-                (let ((*block-context-p* nil))
-                  (let ((txt (emit-expr f)))
-                    (write-string (indent-lines txt) out)
-                    (write-char #\Newline out))))
+                (let ((txt (emit-expr f)))
+                  (write-string (indent-lines txt indent) out)
+                  (write-char #\Newline out)))
                ;; Statement
                (t
-                (let ((*block-context-p* nil))
-                  (let ((txt (emit-stmt-raw f)))
-                    (if (string= txt "")
-                        (write-char #\Newline out)
-                        (progn
-                          (write-string (indent-lines txt) out)
-                          (write-char #\Newline out))))))))))
+                (let ((txt (emit-stmt-raw f)))
+                  (if (string= txt "")
+                      (write-char #\Newline out)
+                      (progn
+                        (write-string (indent-lines txt indent) out)
+                        (write-char #\Newline out)))))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Public entry point
@@ -1354,13 +1329,11 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
   "Transpile S-expression CODE into a Goose source string.
 Pass :OMIT-REDUNDANT-PARENTHESES NIL for fully-parenthesized Oracle output."
   (let ((*omit-redundant-parentheses* omit-redundant-parentheses)
-        (*indent-level* 0)
-        (*block-context-p* nil)
         (*make-context-p* nil)
         (*match-context-p* nil))
     (cond
       ((and (consp code) (sym-eq (car code) "DO0"))
-       (emit-body-forms (cdr code) :expr-last-p nil))
+       (emit-body-forms (cdr code) :expr-last-p nil :indent 0))
       ((statement-only-form-p code)
        (let ((txt (emit-stmt-raw code)))
          (if (string= txt "") "" (format nil "~a~%" txt))))

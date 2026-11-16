@@ -20,7 +20,7 @@
 
 (defsystem "cl-goose-generator/tests"
   :description "Unit, regression, and differential paren-fuzzer tests for cl-goose-generator."
-  :depends-on ("cl-goose-generator" "fiveam" "named-readtables" "uiop")
+  :depends-on ("cl-goose-generator" "named-readtables" "uiop")
   :serial t
   :components
   ((:module "tests"
