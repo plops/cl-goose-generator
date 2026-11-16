@@ -1,9 +1,10 @@
 ;;;; tests/suite.lisp
-;;;; Zero-dependency test suite for cl-goose-generator, including readtable hygiene,
+;;;; FiveAM test suite for cl-goose-generator, including readtable hygiene,
 ;;;; foreign-package dispatch, write-source cache, arity checks, and full Goose spec.
 
 (defpackage #:cl-goose-generator/tests
-  (:use #:cl)
+  (:use #:cl #:fiveam)
+  (:shadow #:run-all-tests)
   (:import-from #:cl-goose-generator
                 #:emit-goose
                 #:emit-type
@@ -17,53 +18,8 @@
 
 (named-readtables:in-readtable :cl-goose-generator)
 
-(defvar *tests* nil)
-(defvar *current-test* nil)
-(defvar *assertion-count* 0)
-(defvar *failure-count* 0)
-
-(defun register-test (name fn)
-  (let ((existing (assoc name *tests*)))
-    (if existing
-        (setf (cdr existing) fn)
-        (setf *tests* (append *tests* (list (cons name fn)))))))
-
-(defmacro test (name &body body)
-  `(register-test ',name (lambda () ,@body)))
-
-(defun %record-assertion (ok fmt &rest args)
-  (incf *assertion-count*)
-  (unless ok
-    (incf *failure-count*)
-    (format t "~&FAIL [~a]: ~?~%" *current-test* fmt args))
-  ok)
-
-(defmacro is (expr &optional fmt &rest args)
-  (let ((val (gensym "VAL-")))
-    `(let ((,val ,expr))
-       ,(if fmt
-            `(%record-assertion ,val ,fmt ,@args)
-            `(%record-assertion ,val "Expected truthy value for ~s, got ~s" ',expr ,val)))))
-
-(defmacro is-true (expr &optional fmt &rest args)
-  `(is ,expr ,@(when fmt (cons fmt args))))
-
-(defmacro is-false (expr &optional fmt &rest args)
-  (let ((val (gensym "VAL-")))
-    `(let ((,val ,expr))
-       ,(if fmt
-            `(%record-assertion (null ,val) ,fmt ,@args)
-            `(%record-assertion (null ,val) "Expected NIL for ~s, got ~s" ',expr ,val)))))
-
-(defmacro signals (condition-type &body body)
-  `(%record-assertion
-    (handler-case (progn ,@body nil)
-      (,condition-type (c)
-        (declare (ignore c))
-        t))
-    "Expected condition ~s to be signaled by ~s"
-    ',condition-type
-    ',body))
+(def-suite :cl-goose-generator)
+(in-suite :cl-goose-generator)
 
 (defun trim-ws (s)
   (string-trim '(#\Space #\Tab #\Newline #\Return) s))
@@ -334,29 +290,4 @@
           (is-true w3))))))
 
 (defun run-all-tests ()
-  (let ((*current-test* nil)
-        (*assertion-count* 0)
-        (*failure-count* 0)
-        (passed-tests 0)
-        (failed-tests 0))
-    (dolist (entry *tests*)
-      (let* ((*current-test* (car entry))
-             (fn (cdr entry))
-             (failures-before *failure-count*))
-        (handler-case
-            (funcall fn)
-          (error (e)
-            (incf *failure-count*)
-            (format t "~&FAIL [~a]: Unexpected error: ~a~%" *current-test* e)))
-        (if (= failures-before *failure-count*)
-            (progn
-              (incf passed-tests)
-              (format t "~&PASS ~a~%" *current-test*))
-            (incf failed-tests))))
-    (format t "~&~%cl-goose-generator tests: ~d/~d passed (~d assertions, ~d failures).~%"
-            passed-tests (+ passed-tests failed-tests)
-            *assertion-count* *failure-count*)
-    (when (plusp *failure-count*)
-      (error "cl-goose-generator test suite failed with ~d failure~:p."
-             *failure-count*))
-    t))
+  (run! :cl-goose-generator))

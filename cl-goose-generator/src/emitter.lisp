@@ -453,7 +453,9 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
            (destructuring-bind (_ field-expr val-expr) cur
              (declare (ignore _))
              (push (format nil "~a: ~a"
-                           (emit-expr field-expr)
+                           (if (or (symbolp field-expr) (stringp field-expr))
+                               (goose-symbol-name field-expr)
+                               (emit-expr field-expr))
                            (emit-expr val-expr))
                    entries)))
           ((and (consp cur) (sym-member (car cur) '("CONST-FOR" "CONST-IF" "CONST-COND")))

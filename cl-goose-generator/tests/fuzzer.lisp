@@ -6,6 +6,8 @@
 
 (named-readtables:in-readtable :cl-goose-generator)
 
+(in-suite :cl-goose-generator)
+
 (defun lcg-next (state)
   "Deterministic 32-bit LCG for repeatable fuzz seeds."
   (mod (+ (* 1664525 state) 1013904223) 4294967296))

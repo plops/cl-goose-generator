@@ -198,6 +198,7 @@ const SETUP_SNIPPET = `ln -s /path/to/cl-goose-generator ~/quicklisp/local-proje
 
 ;; In Emacs / SLIME REPL:
 (ql:quickload :cl-goose-generator)
+(ql:quickload "fiveam")
 (asdf:test-system :cl-goose-generator)`;
 
 export default function App() {

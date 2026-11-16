@@ -11,9 +11,10 @@ A Common Lisp ASDF code generator (`cl-cpp-generator2` style) that emits idiomat
 (ql:quickload :cl-goose-generator)
 ```
 
-3. Run the unit + differential Paren Fuzzer test suite (zero external test dependencies):
+3. Install FiveAM (if not already present) and run the FiveAM + differential Paren Fuzzer test suite:
 
 ```lisp
+(ql:quickload "fiveam")
 (asdf:test-system :cl-goose-generator)
 ```
 
