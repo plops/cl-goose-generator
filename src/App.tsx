@@ -106,7 +106,7 @@ fn insert_after(p: Node&, v: i64) -> Node& {
               (const-for ((tuple fname facc) (fields elem))
                 (const-if (not (has_default facc))
                   (:field facc (dot src facc))))
-              ..)))
+              :..)))
 
   (defun main ()
     (var ((packed (list) (grow (var-mode Shape))))

@@ -48,6 +48,6 @@ In files that use mixed-case Goose type names (`Node`, `Shape`, `Unit`), opt int
        (var ((pool (list) (grow Node)))
          ,@(loop for v in '(10 20 30)
                  collect `(dot pool (push (make Node :val ,v))))
-         (for ((tuple item i) pool)
+         (for ((tuple &item i) pool)
            (print i ": " (dot item val)))))))
 ```

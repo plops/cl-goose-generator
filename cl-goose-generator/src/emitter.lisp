@@ -437,13 +437,13 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
 ;;; ---------------------------------------------------------------------------
 
 (defun emit-make-entries (items)
-  "Emit struct initializer entries from ITEMS (keyword pairs, positionals, .., const-for)."
+  "Emit struct initializer entries from ITEMS (keyword pairs, positionals, :../:defaults, const-for)."
   (let ((entries '())
         (has-expansion nil))
     (loop while items do
       (let ((cur (pop items)))
         (cond
-          ((sym-eq cur "..")
+          ((or (sym-eq cur "..") (sym-eq cur "DEFAULTS"))
            (push ".." entries))
           ((keywordp cur)
            (when (null items)
@@ -451,7 +451,7 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
            (let ((val (pop items)))
              (push (format nil "~a: ~a" (goose-symbol-name cur) (emit-expr val))
                    entries)))
-          ((and (consp cur) (sym-eq (car cur) ":FIELD"))
+          ((and (consp cur) (sym-eq (car cur) "FIELD"))
            (destructuring-bind (_ field-expr val-expr) cur
              (declare (ignore _))
              (push (format nil "~a: ~a"
