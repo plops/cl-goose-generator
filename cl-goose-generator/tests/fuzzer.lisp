@@ -1,0 +1,98 @@
+;;;; tests/fuzzer.lisp
+;;;; Differential Paren Fuzzer: compares clean mode vs Oracle mode over 2,000
+;;;; deterministic randomized Goose expression trees.
+
+(in-package #:cl-goose-generator/tests)
+
+(named-readtables:in-readtable :cl-goose-generator)
+
+(defun lcg-next (state)
+  "Deterministic 32-bit LCG for repeatable fuzz seeds."
+  (mod (+ (* 1664525 state) 1013904223) 4294967296))
+
+(defun fuzz-rand (state-box n)
+  (let ((next (lcg-next (car state-box))))
+    (setf (car state-box) next)
+    (mod next n)))
+
+(defun balanced-parens-p (str)
+  (let ((round 0)
+        (square 0)
+        (curly 0)
+        (in-str nil)
+        (escape nil))
+    (loop for ch across str do
+      (cond
+        (escape (setf escape nil))
+        (in-str
+         (cond ((char= ch #\\) (setf escape t))
+               ((char= ch #\") (setf in-str nil))))
+        (t
+         (case ch
+           (#\" (setf in-str t))
+           (#\( (incf round))
+           (#\) (decf round))
+           (#\[ (incf square))
+           (#\] (decf square))
+           (#\{ (incf curly))
+           (#\} (decf curly)))
+         (when (or (< round 0) (< square 0) (< curly 0))
+           (return-from balanced-parens-p nil)))))
+    (and (not in-str) (zerop round) (zerop square) (zerop curly))))
+
+(defun gen-random-expr (state-box depth)
+  (if (<= depth 0)
+      (ecase (fuzz-rand state-box 7)
+        (0 'x)
+        (1 'y)
+        (2 0)
+        (3 3)
+        (4 -3)
+        (5 1.5)
+        (6 'true))
+      (ecase (fuzz-rand state-box 16)
+        (0 `(+ ,(gen-random-expr state-box (1- depth))
+               ,(gen-random-expr state-box (1- depth))))
+        (1 `(- ,(gen-random-expr state-box (1- depth))
+               ,(gen-random-expr state-box (1- depth))))
+        (2 `(* ,(gen-random-expr state-box (1- depth))
+               ,(gen-random-expr state-box (1- depth))))
+        (3 `(/ ,(gen-random-expr state-box (1- depth))
+               ,(gen-random-expr state-box (1- depth))))
+        (4 `(% ,(gen-random-expr state-box (1- depth))
+               ,(gen-random-expr state-box (1- depth))))
+        (5 `(- ,(gen-random-expr state-box (1- depth))))
+        (6 `(not ,(gen-random-expr state-box (1- depth))))
+        (7 `(lognot ,(gen-random-expr state-box (1- depth))))
+        (8 `(== ,(gen-random-expr state-box (1- depth))
+                ,(gen-random-expr state-box (1- depth))))
+        (9 `(< ,(gen-random-expr state-box (1- depth))
+               ,(gen-random-expr state-box (1- depth))))
+        (10 `(and ,(gen-random-expr state-box (1- depth))
+                  ,(gen-random-expr state-box (1- depth))))
+        (11 `(or ,(gen-random-expr state-box (1- depth))
+                 ,(gen-random-expr state-box (1- depth))))
+        (12 `(dot ,(gen-random-expr state-box (1- depth))
+                  (abs)))
+        (13 `(aref arr ,(gen-random-expr state-box (1- depth))))
+        (14 `(subseq arr 0 ,(gen-random-expr state-box (1- depth))))
+        (15 `(as ,(gen-random-expr state-box (1- depth)) i64)))))
+
+(test differential-paren-fuzzer
+  (let ((state-box (list 42))
+        (iterations 2000))
+    (dotimes (i iterations)
+      (let* ((expr (gen-random-expr state-box 4))
+             (clean (emit-goose expr :omit-redundant-parentheses t))
+             (oracle (emit-goose expr :omit-redundant-parentheses nil)))
+        (is (plusp (length clean)) "Empty clean output at iteration ~d" i)
+        (is (plusp (length oracle)) "Empty oracle output at iteration ~d" i)
+        (is (balanced-parens-p clean)
+            "Unbalanced clean output ~s for ~s" clean expr)
+        (is (balanced-parens-p oracle)
+            "Unbalanced oracle output ~s for ~s" oracle expr)
+        ;; Numbers as dot receivers must never emit bare "3.abs()" or "-3.abs()"
+        (is (null (search "3.abs" clean))
+            "Unparenthesized number dot receiver in clean mode: ~s" clean)
+        (is (null (search "3.abs" oracle))
+            "Unparenthesized number dot receiver in oracle mode: ~s" oracle)))))
