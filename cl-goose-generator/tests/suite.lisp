@@ -240,7 +240,20 @@
                                   :..))))))
     (is (search "const for <N, A> in fields<T>" code-upper))
     (is (search "const if !has_default<A>" code-upper))
-    (is (search "A: src.A," code-upper))))
+    (is (search "A: src.A," code-upper)))
+  (let ((nested-match
+         (emit-goose
+          '(defun show (value)
+             (declare (generics elem) (type elem value))
+             (match value
+               (const-for ((tuple vname vtag) (variants elem))
+                 ((vtag v)
+                  (print vname)
+                  (const-for ((tuple fname facc) (fields vtag))
+                    (print "  " fname " = " (dot v facc))))))))))
+    (is (search "const for <vname, vtag> in variants<elem> {" nested-match))
+    (is (search "const for <fname, facc> in fields<vtag> {" nested-match))
+    (is (null (search "print =>" nested-match)))))
 
 (test guard-defer-match-and-return-from
   (let ((code (emit-goose

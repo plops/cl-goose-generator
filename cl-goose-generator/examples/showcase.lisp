@@ -52,6 +52,7 @@
 
 (defparameter *ex2-relative-bst*
   `(do0
+     (import std)
      (defstruct Node
        (word (cap-arr u8 8))
        (count i32 :default 1)
@@ -81,8 +82,8 @@
 
      (defun main ()
        (var ((index (list) (grow Node)))
-         (with-block (each_word "the quick fox and the fox")
-           (insert index it))
+         (for (w (words "the quick fox and the fox"))
+           (insert index w))
          (var ((image (dot index (to_bytes)) (grow u8))
                ((tuple loaded ok) ((inst from_bytes (grow Node)) image)))
            (print ok " " (dot loaded len) " nodes"))))))
@@ -118,7 +119,14 @@
      (defun is_end (n)
        (declare (type (ref Node) n)
                 (values bool))
-       (.== n head))))
+       (.== n head))
+
+     (defun main ()
+       (let (((.= a) (insert_after head 10))
+             ((.= b) (insert_after a 20)))
+         (print (dot a val) " " (dot b val) " " (is_end head) " " (dot pool items len))
+         (remove a)
+         (print "slots after free: " (dot pool items len))))))
 
 (defparameter *ex4-enums-and-reflection*
   `(do0
@@ -126,6 +134,11 @@
        (Circle (r f64))
        (Rect (w f64) (h f64))
        Dot)
+
+     (defstruct Item
+       (name (cap-arr u8 8))
+       (price i64)
+       (tax i64 :default 20))
 
      (defun show (value)
        (declare (generics elem)
@@ -148,6 +161,10 @@
                  :..)))
 
      (defun main ()
+       (let ((s (variant Shape Rect :w 3.0 :h 4.0) Shape))
+         (show s))
+       (var ((item (make Item :name "pen" :price 5 :tax 7)))
+         (print (reset_defaults item)))
        (var ((packed (list) (grow (var-mode Shape))))
          ,@(loop for (tag args) in '((Circle (:r 2.0))
                                      (Rect (:w 3.0 :h 4.0))
@@ -156,7 +173,8 @@
          (for (s packed)
            (match s
              ((Rect &r) (incf (dot r w) 1.0))
-             (_ (scope))))))))
+             (_ (scope))))
+         (print packed)))))
 
 (defparameter *ex5-return-from-guard-defer*
   `(do0
@@ -195,10 +213,25 @@
        (declare (type bool ok))
        (guard ok :else (return))
        (defer (print "cleanup ran on every exit"))
-       (print "running"))))
+       (print "running"))
+
+     (defun report (text)
+       (declare (type (slice u8) text))
+       (let (((tuple users err) (load text)))
+         (when (> (dot err len) 0)
+           (print "error: " err)
+           (return))
+         (print "loaded " (dot users len) " users")))
+
+     (defun main ()
+       (report ,(format nil "ada, 36~%linus, 20~%"))
+       (report ,(format nil "ada, 36~%linus~%"))
+       (report ,(format nil "ada, x~%"))
+       (with_guard_and_defer true))))
 
 (defparameter *ex6-index-checkfree-threads*
   `(do0
+     (import std)
      (defparameter nodes (list) (grow i32))
      (deftype NodeId (in u32 nodes))
 
@@ -213,6 +246,16 @@
            (incf total (+ (aref nodes id) (aref weights id))))
          (return total)))
 
+     (defun count_digits (n)
+       (declare (type i32 n)
+                (values i32))
+       (var ((d 1 i32)
+             (v n))
+         (while (>= v 10)
+           (/= v 10)
+           (incf d))
+         (return d)))
+
      ,@(loop for (name fields) in '((Job ((n i32)))
                                     (Result ((n i32) (digits i32))))
              collect `(defstruct ,name ,@fields))
@@ -223,7 +266,29 @@
          (let ((job ((inst qget Job))))
            (guard (>= (dot job n) 0) :else (break))
            (qput (make Result :n (dot job n)
-                              :digits (count_digits (dot job n)))))))))
+                              :digits (count_digits (dot job n)))))))
+
+     (defun main ()
+       (for (w (list 1 2 3))
+         (dot nodes (push (as w i32))))
+       (var ((weights (list 10 20 30) (grow i32)))
+         (let ((ids (list (as 2 NodeId) (as 0 NodeId)) (arr NodeId 2)))
+           (print "sum_at = " (sum_at ids weights))))
+       (let ((n (max 1 (hardware_threads))))
+         (for (i 8)
+           (qput (make Job :n (as (ash 1 (* i 3)) i32))))
+         (for (i n)
+           (qput (make Job :n -1)))
+         (var ((ids (list) (grow i64)))
+           (for (i n)
+             (dot ids (push (thread_spawn worker))))
+           (var ((total 0))
+             (for (i 8)
+               (let ((r ((inst qget Result))))
+                 (incf total (dot r digits))))
+             (for (id ids)
+               (thread_wait id))
+             (print total " digits in total")))))))
 
 (defun generate-showcase (&optional (dir "/tmp/goose-showcase/"))
   (dolist (entry `(("01_inline_orders.goose" ,*ex1-inline-orders*)

@@ -447,7 +447,9 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
            (when (null items)
              (error "Missing value after field keyword ~s in MAKE" cur))
            (let ((val (pop items)))
-             (push (format nil "~a: ~a" (goose-symbol-name cur) (emit-expr val))
+             (push (format nil "~a: ~a"
+                           (goose-symbol-name cur)
+                           (let ((*make-context-p* nil)) (emit-expr val)))
                    entries)))
           ((and (consp cur) (sym-eq (car cur) "FIELD"))
            (destructuring-bind (_ field-expr val-expr) cur
@@ -455,15 +457,15 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
              (push (format nil "~a: ~a"
                            (if (or (symbolp field-expr) (stringp field-expr))
                                (goose-symbol-name field-expr)
-                               (emit-expr field-expr))
-                           (emit-expr val-expr))
+                               (let ((*make-context-p* nil)) (emit-expr field-expr)))
+                           (let ((*make-context-p* nil)) (emit-expr val-expr)))
                    entries)))
           ((and (consp cur) (sym-member (car cur) '("CONST-FOR" "CONST-IF" "CONST-COND")))
            (setf has-expansion t)
            (let ((*make-context-p* t))
              (push (emit-stmt-raw cur) entries)))
           (t
-           (push (emit-expr cur) entries)))))
+           (push (let ((*make-context-p* nil)) (emit-expr cur)) entries)))))
     (values (nreverse entries) has-expansion)))
 
 (defun emit-make-literal (type-spec field-args)
@@ -684,9 +686,13 @@ When NIL (Oracle mode), parenthesize all compound subexpressions explicitly.")
           (format nil "~a => {}," pat))
          ((and (= (length body) 1)
                (not (statement-only-form-p (first body))))
-          (format nil "~a => ~a," pat (emit-expr (first body))))
+          (format nil "~a => ~a," pat
+                  (let ((*match-context-p* nil))
+                    (emit-expr (first body)))))
          (t
-          (format nil "~a => ~a," pat (emit-block-body body :expr-p expr-p))))))
+          (format nil "~a => ~a," pat
+                  (let ((*match-context-p* nil))
+                    (emit-block-body body :expr-p expr-p)))))))
     (t (error "Invalid match arm ~s" arm))))
 
 (defun emit-match (form &key expr-p)
